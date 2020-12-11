@@ -129,7 +129,7 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 		reply.VoteGranded = false
 	}	
 
-	if rf.votedFor == nil || (rf.votedFor == args.CandidateID) {
+	if rf.votedFor == args.CandidateID {
 		reply.VoteGranded = true
 	}else{
 		reply.VoteGranded= false
