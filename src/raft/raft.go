@@ -56,17 +56,16 @@ type Raft struct {
 	currentTerm int
 	votedFor    int
 
-	state             RaftState
-	electionResetTime time.Time
+	state      State
+	timerStart time.Time
 }
 
-type RaftState int
+type State int
 
 const (
-	Follower RaftState = iota
+	Follower State = iota
 	Candidate
 	Leader
-	Dead
 )
 
 // return currentTerm and whether this server
@@ -74,11 +73,14 @@ const (
 func (rf *Raft) GetState() (int, bool) {
 
 	var term int
-	var isleader bool
+	var isLeader bool
 	// Your code here.
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	term = rf.currentTerm
-	isleader = rf.me == rf.votedFor
-	return term, isleader
+	isLeader = rf.state == Leader
+
+	return term, isLeader
 }
 
 //
@@ -126,7 +128,7 @@ type RequestVoteArgs struct {
 type RequestVoteReply struct {
 	// Your data here.
 	Term        int
-	VoteGranded bool
+	VoteGranted bool
 }
 
 //
@@ -142,9 +144,9 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 	}
 
 	if rf.currentTerm == args.Term && (rf.votedFor == -1 || rf.votedFor == args.CandidateID) {
-		reply.VoteGranded = true
+		reply.VoteGranted = true
 		rf.votedFor = args.CandidateID
-		rf.electionResetTime = time.Now()
+		rf.timerStart = time.Now()
 	}
 
 	reply.Term = rf.currentTerm
@@ -228,7 +230,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	go func() {
 		rf.mu.Lock()
-		rf.electionResetTime = time.Now()
+		rf.timerStart = time.Now()
 		rf.mu.Unlock()
 		rf.runElectionTimer()
 
@@ -257,7 +259,7 @@ func (rf *Raft) runElectionTimer() {
 			return
 		}
 
-		if time.Since(rf.electionResetTime) >= timeoutDuration {
+		if time.Since(rf.timerStart) >= timeoutDuration {
 			rf.startElection()
 			rf.mu.Unlock()
 			return
@@ -269,32 +271,36 @@ func (rf *Raft) runElectionTimer() {
 
 func (rf *Raft) startElection() {
 	rf.state = Candidate
-	rf.currentTerm++
+	rf.currentTerm += 1
 	tempCurrentTerm := rf.currentTerm
-	rf.electionResetTime = time.Now()
+	rf.timerStart = time.Now()
 	rf.votedFor = rf.me
 
 	var voteCount int32 = 1
 
 	for i := 0; i < len(rf.peers); i++ {
+		if i == rf.me {
+			continue
+		}
 		go func(id int) {
-			requestVoteArgs := RequestVoteArgs{
-				Term: tempCurrentTerm,
+			args := RequestVoteArgs{
+				Term:        tempCurrentTerm,
+				CandidateID: rf.me,
 			}
-			var requestVoteReply RequestVoteReply
-			if ok := rf.sendRequestVote(id, requestVoteArgs, &requestVoteReply); ok {
+			var reply RequestVoteReply
+			if ok := rf.sendRequestVote(id, args, &reply); ok {
 				rf.mu.Lock()
 				defer rf.mu.Unlock()
 				if rf.state != Candidate {
 					return
 				}
 
-				if requestVoteReply.Term > tempCurrentTerm {
-					rf.becomeFollower(requestVoteReply.Term)
+				if reply.Term > tempCurrentTerm {
+					rf.becomeFollower(reply.Term)
 					return
-				} else if requestVoteReply.Term == tempCurrentTerm && requestVoteReply.VoteGranded {
+				} else if reply.Term == tempCurrentTerm && reply.VoteGranted {
 					votes := int(atomic.AddInt32(&voteCount, 1))
-					if votes*2 > len(rf.peers)+1 {
+					if votes*2 > len(rf.peers) {
 						rf.becomeLeader()
 						return
 					}
@@ -311,7 +317,7 @@ func (rf *Raft) becomeFollower(term int) {
 	rf.state = Follower
 	rf.currentTerm = term
 	rf.votedFor = -1
-	rf.electionResetTime = time.Now()
+	rf.timerStart = time.Now()
 
 	go rf.runElectionTimer()
 }
@@ -319,7 +325,6 @@ func (rf *Raft) becomeFollower(term int) {
 func (rf *Raft) becomeLeader() {
 	rf.state = Leader
 	rf.votedFor = -1
-	rf.electionResetTime = time.Now()
 
 	go func() {
 		ticker := time.NewTicker(5 * time.Millisecond)
@@ -341,6 +346,7 @@ func (rf *Raft) becomeLeader() {
 }
 
 type AppendEntriesArgs struct {
+	Term int
 }
 
 type AppendEntriesReply struct {
@@ -348,7 +354,21 @@ type AppendEntriesReply struct {
 }
 
 func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 
+	if args.Term > rf.currentTerm {
+		rf.becomeFollower(args.Term)
+	}
+
+	if args.Term == rf.currentTerm {
+		if rf.state != Follower {
+			rf.becomeFollower(args.Term)
+		}
+		rf.timerStart = time.Now()
+	}
+
+	reply.Term = rf.currentTerm
 }
 
 func (rf *Raft) sendAppendEntries(server int, args AppendEntriesArgs, reply *AppendEntriesReply) bool {
@@ -362,13 +382,19 @@ func (rf *Raft) sendHeartBeatSig() {
 	rf.mu.Unlock()
 
 	for i := 1; i < len(rf.peers); i++ {
-		args := AppendEntriesArgs{}
+		if rf.me == i {
+			continue
+		}
 
-		var reply AppendEntriesReply
+		args := AppendEntriesArgs{
+			Term: tempCurrentTerm,
+		}
 
 		go func(id int) {
-			if ok := rf.sendAppendEntries(id, args, &reply); !ok {
-				if tempCurrentTerm <= reply.Term {
+			var reply AppendEntriesReply
+
+			if ok := rf.sendAppendEntries(id, args, &reply); ok {
+				if tempCurrentTerm < reply.Term {
 					rf.mu.Lock()
 					rf.becomeFollower(reply.Term)
 					rf.mu.Unlock()
