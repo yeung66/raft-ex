@@ -311,6 +311,8 @@ func TestRejoin(t *testing.T) {
 	// old leader connected again
 	cfg.connect(leader1)
 
+	//fmt.Println(cfg.checkOneLeader())
+
 	cfg.one(104, 2)
 
 	// all together now
