@@ -20,7 +20,6 @@ package raft
 import (
 	"bytes"
 	"encoding/gob"
-	"fmt"
 	"math/rand"
 	"sync"
 	"sync/atomic"
@@ -434,7 +433,7 @@ func (rf *Raft) becomeLeader() {
 		rf.matchIndex[i] = 0
 	}
 
-	fmt.Println(rf.me, rf.currentTerm)
+	//fmt.Println(rf.me, rf.currentTerm)
 
 	go rf.persist()
 
@@ -522,7 +521,7 @@ func (rf *Raft) sendUpdateCommitIndexEvent() {
 
 	for i, entry := range entries {
 		rf.mu.Lock()
-		fmt.Println(rf.me, rf.state, rf.currentTerm, lastApplied+1+i, (entry.Command).(int))
+		//fmt.Println(rf.me, rf.state, rf.currentTerm, lastApplied+1+i, (entry.Command).(int))
 		rf.mu.Unlock()
 		rf.commitEvent <- ApplyMsg{
 			Index:   lastApplied + 1 + i,
@@ -578,9 +577,9 @@ func (rf *Raft) sendHeartBeatSig() {
 
 				if tempCurrentTerm < reply.Term {
 					//rf.mu.Lock()
-					fmt.Println(rf.me, rf.currentTerm, reply.Term, rf.state)
+					//fmt.Println(rf.me, rf.currentTerm, reply.Term, rf.state)
 					rf.becomeFollower(reply.Term)
-					fmt.Println(rf.me, rf.currentTerm, reply.Term, rf.state)
+					//fmt.Println(rf.me, rf.currentTerm, reply.Term, rf.state)
 					//rf.mu.Unlock()
 					return
 				}
